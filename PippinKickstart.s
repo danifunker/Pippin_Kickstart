@@ -21,7 +21,6 @@
 .global _start
 
 /* Low memory globals */
-.equ	MemTop,		0x0108
 .equ	ROMBase,	0x02AE
 
 /* Data block sizes */
@@ -36,22 +35,19 @@
 .equ	csCode,			26
 .equ	ioRefNum,		24
 
-/* Offsets into drive queue element */
-.equ	dqRefNum,		8
-
 /* Device Manager constants */
-.equ	flashRefNum,	-81
 .equ	ejectCode,		7
 .equ	fsFromStart,	1
 
 /* Disk Driver error codes */
-.equ	offLinErr,		-65
 .equ	noDriveErr,		-64
+.equ	offLinErr,		-65
 
 /* Miscellaneous constants */
-.equ	whiteColor,		30
-.equ	dsNoPatch,		98
+.equ	gestaltPhysicalRAMSize,	0x72616D20	/* 'ram ' */
 .equ	ellipsis,		201
+.equ	dsNoPatch,		98
+.equ	whiteColor,		30
 
 /* Toolbox traps */
 .macro	_Read
@@ -60,29 +56,29 @@
 .macro	_Control
 	dc.w	0xA004
 	.endm
+.macro	_Gestalt
+	dc.w	0xA1AD
+	.endm
+.macro	_ForeColor
+	dc.w	0xA862
+	.endm
 .macro	_DrawChar
 	dc.w	0xA883
 	.endm
 .macro	_DrawString
 	dc.w	0xA884
 	.endm
-.macro	_DrawText
-	dc.w	0xA885
-	.endm
-.macro	_ForeColor
-	dc.w	0xA862
+.macro	_MoveTo
+	dc.w	0xA893
 	.endm
 .macro	_GetPen
 	dc.w	0xA89A
 	.endm
-.macro	_InitAllPacks
-	dc.w	0xA9E6
-	.endm
-.macro	_MoveTo
-	dc.w	0xA893
-	.endm
 .macro	_SysError
 	dc.w	0xA9C9
+	.endm
+.macro	_InitPack
+	dc.w	0xA9E5
 	.endm
 .macro	_Pack7
 	dc.w	0xA9EE
@@ -94,7 +90,7 @@
 _start:
 BootBlocks:
 	dc.w	0x4C4B	/* 'LK' is the magic that indicates HFS boot blocks */
-	bra		PippinKickstart
+	bra.w	PippinKickstart
 	
 /* These two bytes have to be here or the boot blocks won't get executed. */
 Version:
@@ -103,7 +99,7 @@ Version:
 /* Everything from here on out is for us to use however we want. */
 	
 NotAPippin:
-	moveq	#dsNoPatch, %d0
+	moveq.l	#dsNoPatch, %d0
 	_SysError
 	
 ROMVersionTable:
@@ -132,23 +128,24 @@ PippinKickstart:
 	/* A0 contains a pointer to the ParamBlock that led us here. */
 	/* We need this later to eject ourselves, so use A1 for the ROM check. */
 	movea.l	ROMBase, %a1
-	move	0x12(%a1), %d0	/* the minor version is always at offset 18 */
+	move.w	0x12(%a1), %d0	/* the minor version is always at offset 18 */
 	
 	/* D7 also contains the same ParamBlock pointer, but we don't care. */
 	/* That same pointer eventually gets passed to our new boot blocks later. */
-	moveq	#SubtableSize, %d7
+	moveq.l	#SubtableSize, %d7
 NextROM:
-	subq	#1, %d7
-	bmi.b	NotAPippin
+	subq.w	#1, %d7	/* can't use dbpl here because NotAPippin is not our loop */
+	bmi.s	NotAPippin
 	
-	cmp		ROMVersionTable(%pc, %d7.w*2), %d0
-	bne.b	NextROM
+	cmp.w	ROMVersionTable(%pc, %d7.w*2), %d0
+	bne.s	NextROM
 	
 /* Main kickstart code: */
 /* D7.W contains an index into all of the ROM-specific tables. */
 	
 	move.l	%a0, -(%a7)	/* save our ParamBlock since QuickDraw trashes A0 */
-	_InitAllPacks	/* make sure PACK 7 is available */
+	move.w	#7, -(%a7)	/* make sure PACK 7 is available */
+	_InitPack
 	
 	move.l	#whiteColor, -(%a7)
 	_ForeColor
@@ -159,11 +156,11 @@ NextROM:
 /* Say hello, give credit where due... */
 	
 	lea		HelloString, %a0
-	bsr		PrintLine
+	bsr.s	PrintLine
 	lea		SiteString-1, %a0
 	move.b	#DetectedString-SiteString, (%a0)
-	bsr		PrintLine
-	bsr		NextLine
+	bsr.s	PrintLine
+	bsr.s	NextLine
 	
 /* Let's print what ROM we're running... */
 	
@@ -178,19 +175,21 @@ NextROM:
 	pea		ROMCommaString
 	_DrawString
 	
+	move.l	#gestaltPhysicalRAMSize, %d0
+	_Gestalt	/* we'll assume _Gestalt succeeds... */
+	move.l	%a0, %d0	/* _Gestalt returns our value in A0 */
+	moveq.l	#10, %d1
+	lsr.l	%d1, %d0	/* divide Gestalt result by 1024 to give us kilobytes */
 	subq.l	#8, %a7		/* allocate an up-to-seven-digit Pascal string */
-	movea.l	%a7, %a0	/* Mac OS doesn't support > 1.5GB of RAM anyway ;) */
+	move.l	%a7, %a0	/* Mac OS doesn't support > 1.5GB of RAM anyway ;) */
 	move.l	%a0, -(%a7)	/* have A0 in the stack, ready for _DrawString */
-	move.l	MemTop, %d0
-	move	#10, %d1
-	lsr.l	%d1, %d0	/* divide MemTop by 1024 to give us kilobytes */
-	clr		-(%a7)	/* selector #0: _NumToString */
+	clr.w	-(%a7)	/* selector #0: _NumToString, takes params in A0 and D0 */
 	_Pack7
 	_DrawString
 	addq.l	#8, %a7
 	
 	lea		RAMString, %a0
-	bsr		PrintLine
+	bsr.s	PrintLine
 	
 /* First, let's eject ourselves... */
 	
@@ -198,9 +197,9 @@ NextROM:
 	_DrawString
 	
 	movea.l	(%a7)+, %a0	/* get our ParamBlock back */
-	bsr.b	Eject
+	bsr.w	Eject
 	
-	bsr		PrintDone
+	bsr.s	PrintDone
 	
 /* Now let's enter a loop similar to what the Start Manager does, */
 /*  but without an auth/driver check. */
@@ -210,108 +209,20 @@ NextROM:
 	
 	/* Push return address here. */
 	/* Take us directly to after the call to FindStartupDevice upon return. */
-	bsr		GetROMAddress	/* index into FoundBootDiskSubtable */
+	bsr.s	GetROMAddress	/* index into FoundBootDiskSubtable */
 	move.l	%a1, -(%a7)
 	
 	link	%a4, #-frameSize	/* same frame size used by Start Manager */
 	
 	/* Jsr to EmbarkOnSearch */
-	bsr.b	JsrToROM	/* trashes D0-D2, A0-A1, but doesn't touch D7 */
+	bsr.s	JsrToROM	/* trashes D0-D2, A0-A1, but doesn't touch D7 */
 	
 	lea		IsItAnything, %a3	/* override what EmbarkOnSearch gives us */
 	/* We always want to accept any and all candidates. */
 	
-	bra.b	FirstEntry
+	bra.s	FirstEntry
 	
-NextPass:
-	subq	#(SubtableSize * 2), %d7
-	/* rewind FindNextCandidate, LoadSCSIDrivers */
-	
-FirstEntry:
-	/* Jsr to LoadSCSIDrivers */
-	bsr.b	JsrToROM	/* trashes D0-D2, A0-A1, but doesn't touch D7 */
-	
-TryAgain:
-	/* Give .AppleCD some time */
-	lea		-ioQElSize(%a7), %a7
-	movea.l	%a7, %a0
-	move.l	#0xFFDC0041, ioRefNum(%a0)	/* ioRefNum: -36, csCode: 65 (accRun) */
-	_Control
-	lea		ioQElSize(%a7), %a7
-	
-	/* Jsr to FindNextCandidate */
-	bsr.b	JsrToROM	/* trashes D0-D2, A0-A1, but doesn't touch D7 */
-	beq.b	NextPass
-	
-	/* Jsr to SelectDevice */
-	bsr.b	JsrToROM	/* trashes D0, returns A0/A2 but doesn't touch D7 */
-	
-	/* Read and verify the boot blocks ourselves. */
-	/* This way, if we detect early that they're invalid, we can stay in our */
-	/*  own loop without relinquishing control to the ROM and its checks. */
-	move	#fsFromStart, ioPosMode(%a0)
-	clr.l	ioPosOffset(%a0)
-	move.l	%a6, ioBuffer(%a0)
-	move.l	#0x200, %d0
-	add.l	%d0, ioBuffer(%a0)
-	move.l	%d0, ioReqCount(%a0)
-	_Read
-	cmp		#0x4C4B, 0x200(%a6)	/* 'LK' is the magic word */
-	beq.b	GotIt
-	
-	/* rewind SelectDevice, FindNextCandidate */
-	subq	#(SubtableSize * 2), %d7
-	
-	/* Eject if D0 is not offLinErr (-65) or noDriveErr (-64). */
-	add		#-noDriveErr, %d0
-	beq.b	TryAgain
-	addq	#noDriveErr-offLinErr, %d0
-	beq.b	TryAgain
-	pea		TryAgain	/* return to TryAgain */
-	
-/* Eject is here so it's within range of the bsr.b instruction that calls it. */
-Eject:
-	move	#ejectCode, csCode(%a0)
-	_Control
-	rts
-	
-/* We found a boot candidate, so let's jump back into ROM and boot it. */
-/* We know we've found valid boot blocks because we checked ourselves. */
-	
-GotIt:
-	move.l	%a0, -(%a7)	/* save the ParamBlock from SelectDevice */
-	bsr.b	PrintDone
-	/* Let folks know we're about to boot. */
-	pea		FoundString
-	_DrawString
-	movea.l	(%a7)+, %a0	/* restore the ParamBlock from SelectDevice */
-	
-	/* Push return address here. */
-	bsr.b	GetROMAddress	/* index into AfterRvprTable */
-	move.l	%a1, -(%a7)
-	
-	/* Jump directly to GetStartupInfo, return to the beq.b after 'rvpr' 0. */
-	/* Fall through to JsrToROM; trashes A1 */
-	/*  but who cares because this code no longer exists after this returns */
-	/*  since it'll be replaced by fresh boot blocks, ready to execute. ;) */
-	
-/* input:  D7.W == index into table (which ROM are we * desired subtable) */
-/* output: D7.W == next desired index */
-/* trashes: A1 */
-JsrToROM:
-	bsr.b	GetROMAddress
-	jmp		(%a1)
-	
-	/* ... and we're done here. */
-	
-/* input:  D7.W == index into table (which ROM are we * desired subtable) */
-/* output: A1   == return address from table */
-/*         D7.W == next desired index */
-GetROMAddress:
-	movea.l	ROMBase, %a1
-	adda	ROMOffsetTable(%pc, %d7.w*2), %a1
-	addq	#SubtableSize, %d7
-	rts
+/* These subroutines are here so they're in range of our bsr.s instructions. */
 	
 /* input: none */
 /* trashes: D0-D2, A0-A1 are scratch regs used by QuickDraw */
@@ -324,7 +235,6 @@ PrintDone:
 PrintLine:
 	move.l	%a0, -(%a7)
 	_DrawString
-	/* Fall through to NextLine */
 	
 /* input: none */
 /* trashes: D0-D2, A0-A1 are scratch regs used by QuickDraw */
@@ -333,12 +243,101 @@ NextLine:
 	move.l	%a7, -(%a7)
 	_GetPen
 	/* Advance down by 16 pixels and return to the left "margin." */
-	add		#0x0010, (%a7)
-	move	#0x0040, 2(%a7)
+	add.w	#0x0010, (%a7)
+	move.w	#0x0040, 2(%a7)
 	_MoveTo
-/* Putting this here (in place of NextLine's rts) gets me two bytes back. */
+	rts
+	
+/* We found a boot candidate, so let's jump back into ROM and boot it. */
+/* We know we've found valid boot blocks because we checked ourselves. */
+	
+GotIt:
+	move.l	%a0, -(%a7)	/* save the ParamBlock from SelectDevice */
+	bsr.s	PrintDone
+	/* Let folks know we're about to boot. */
+	pea		FoundString
+	_DrawString
+	movea.l	(%a7)+, %a0	/* restore the ParamBlock from SelectDevice */
+	
+	/* Push return address here. */
+	bsr.s	GetROMAddress	/* index into AfterRvprTable */
+	move.l	%a1, -(%a7)
+	
+	/* Jump directly to GetStartupInfo, return to the beq.s after 'rvpr' 0. */
+	/* Fall through to JsrToROM; trashes A1 */
+	/*  but who cares because this code no longer exists after this returns */
+	/*  since it'll be replaced by fresh boot blocks, ready to execute. ;) */
+	
+/* input:  D7.W == index into table (which ROM are we * desired subtable) */
+/* output: D7.W == next desired index */
+/* trashes: A1 */
+JsrToROM:
+	bsr.s	GetROMAddress
+	jmp		(%a1)
+	
+	/* ... and we're done here. */
+	
+/* input:  D7.W == index into table (which ROM are we * desired subtable) */
+/* output: A1   == return address from table */
+/*         D7.W == next desired index */
+GetROMAddress:
+	movea.l	ROMBase, %a1
+	adda.w	ROMOffsetTable(%pc, %d7.w*2), %a1
+	addq.w	#SubtableSize, %d7
+	rts
+	
+NextPass:
+	subq.w	#(SubtableSize * 2), %d7
+	/* rewind FindNextCandidate, LoadSCSIDrivers */
+	
+FirstEntry:
+	/* Jsr to LoadSCSIDrivers */
+	bsr.s	JsrToROM	/* trashes D0-D2, A0-A1, but doesn't touch D7 */
+	
+TryAgain:
+	/* Give .AppleCD some time */
+	lea		-ioQElSize(%a7), %a7
+	movea.l	%a7, %a0
+	move.l	#0xFFDC0041, ioRefNum(%a0)	/* ioRefNum: -36, csCode: 65 (accRun) */
+	_Control
+	lea		ioQElSize(%a7), %a7
+	
+	/* Jsr to FindNextCandidate */
+	bsr.s	JsrToROM	/* trashes D0-D2, A0-A1, but doesn't touch D7 */
+	beq.s	NextPass
+	
+	/* Jsr to SelectDevice */
+	bsr.s	JsrToROM	/* trashes D0, returns A0/A2 but doesn't touch D7 */
+	
+	/* Read and verify the boot blocks ourselves. */
+	/* This way, if we detect early that they're invalid, we can stay in our */
+	/*  own loop without relinquishing control to the ROM and its checks. */
+	move.w	#fsFromStart, ioPosMode(%a0)
+	clr.l	ioPosOffset(%a0)
+	move.l	%a6, ioBuffer(%a0)
+	move.l	#0x200, %d0
+	add.l	%d0, ioBuffer(%a0)
+	move.l	%d0, ioReqCount(%a0)
+	_Read
+	cmp.w	#0x4C4B, 0x200(%a6)	/* 'LK' is the magic word */
+	beq.s	GotIt
+	
+	/* rewind SelectDevice, FindNextCandidate */
+	subq.w	#(SubtableSize * 2), %d7
+	
+	/* Eject if D0 is not offLinErr (-65) or noDriveErr (-64). */
+	add.w	#-noDriveErr, %d0
+	beq.s	TryAgain
+	addq.w	#noDriveErr-offLinErr, %d0
+	beq.s	TryAgain
+	pea		TryAgain	/* return to TryAgain */
+	
+Eject:
+	move.w	#ejectCode, csCode(%a0)
+	_Control
+/* Putting this here (in place of Eject's rts) gets me two bytes back. */
 IsItAnything:
-	cmp		%d0, %d0	/* return beq */
+	cmp.w	%d0, %d0	/* return beq */
 	rts
 	
 ROMOffsetTable:
@@ -386,10 +385,11 @@ GetStartupInfoSubtable:		/* ROM call */
 	dc.w	0x1A02	/* 1.3 */
 	
 HelloString:
-	dc.b	31 /* SiteString-.-1 */
-	.ascii	"Pippin Kickstart 1.0 by " /* blitter" */
+	dc.b	33
+	.ascii	"Pippin Kickstart 1.0.1 by "
+	/* Continue with "blitter" into the next string. */
 SiteString:
-	/* dc.b	DetectedString-.-1 */
+	/* Don't define a length here because we poke it into SiteString-1. */
 	.ascii	"blitter.net/pippinkickstart"
 DetectedString:
 	dc.b	RAMString-.-1
