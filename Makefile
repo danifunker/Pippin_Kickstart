@@ -1,4 +1,5 @@
 AS      = m68k-apple-macos-as
+ASFLAGS = -l
 LD      = m68k-apple-macos-ld
 LDFLAGS = --oformat binary
 RM      = rm
